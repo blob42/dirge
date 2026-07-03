@@ -180,14 +180,12 @@ pub(crate) const MAX_TURNS_NOTICE_PREFIX: &str = "[dirge] Max agent turns";
 /// The unfinished-todo nudge message. Pure (no globals) so the singular/plural
 /// wording is unit-testable independent of the todo store.
 fn todo_nudge_message(unfinished: usize) -> LoopMessage {
-    LoopMessage::User(super::message::UserMessage {
-        content: format!(
-            "{TODO_NUDGE_TAG} You still have {unfinished} unfinished todo{} (pending or in progress). \
-             Finish the remaining work, or if it's genuinely done or no longer needed, \
-             update the todo list (mark items completed/cancelled) before stopping.",
-            if unfinished == 1 { "" } else { "s" }
-        ),
-    })
+    LoopMessage::User(super::message::UserMessage::text(format!(
+        "{TODO_NUDGE_TAG} You still have {unfinished} unfinished todo{} (pending or in progress). \
+         Finish the remaining work, or if it's genuinely done or no longer needed, \
+         update the todo list (mark items completed/cancelled) before stopping.",
+        if unfinished == 1 { "" } else { "s" }
+    )))
 }
 
 /// Poll the finalization gates in strict priority order and return the first
@@ -909,7 +907,7 @@ pub async fn run_agent_loop(
     let task_query: String = prompts
         .iter()
         .filter_map(|m| match m {
-            LoopMessage::User(u) => Some(u.content.as_str()),
+            LoopMessage::User(u) => Some(u.text_joined()),
             _ => None,
         })
         .collect::<Vec<_>>()
@@ -922,7 +920,7 @@ pub async fn run_agent_loop(
     // Injected into the model-facing context ONLY — not `new_messages` —
     // so it steers this run without being persisted into session history.
     if let Some(block) = crate::agent::exemplars::block_for_task(&task_query, EXEMPLAR_TOP_K) {
-        let ex_msg = LoopMessage::User(super::message::UserMessage { content: block });
+        let ex_msg = LoopMessage::User(super::message::UserMessage::text(block));
         context.messages.push(loop_message_to_value(&ex_msg));
     }
 
@@ -933,7 +931,7 @@ pub async fn run_agent_loop(
         // prompts so it can decide whether the streak persists or
         // resets to a new topic.
         if let (Some(tracker), LoopMessage::User(u)) = (&config.file_touch_tracker, prompt) {
-            tracker.record_user_message(&u.content);
+            tracker.record_user_message(&u.text_joined());
         }
     }
 
@@ -963,7 +961,7 @@ pub async fn run_agent_loop(
         match tokio::task::spawn_blocking(move || p.search(&q)).await {
             Ok(Ok(resp)) => {
                 if let Some(block) = super::context_manager::pre_recall_block(&resp, &snapshot) {
-                    let msg = LoopMessage::User(super::message::UserMessage { content: block });
+                    let msg = LoopMessage::User(super::message::UserMessage::text(block));
                     context.messages.push(loop_message_to_value(&msg));
                 }
             }
@@ -990,7 +988,7 @@ pub async fn run_agent_loop(
         if let Ok(store) = crate::extras::issue_db::IssueStore::open_at(&db_path)
             && let Ok(Some(block)) = store.board_reminder(ISSUE_BOARD_TOP_N)
         {
-            let msg = LoopMessage::User(super::message::UserMessage { content: block });
+            let msg = LoopMessage::User(super::message::UserMessage::text(block));
             context.messages.push(loop_message_to_value(&msg));
         }
     }
@@ -1307,9 +1305,11 @@ pub async fn run_loop(
                     // those so they don't reset the streak they just
                     // diagnosed.
                     if let (Some(tracker), LoopMessage::User(u)) = (&config.file_touch_tracker, msg)
-                        && !u.content.contains("[Context-depth reminder]")
                     {
-                        tracker.record_user_message(&u.content);
+                        let joined = u.text_joined();
+                        if !joined.contains("[Context-depth reminder]") {
+                            tracker.record_user_message(&joined);
+                        }
                     }
                 }
                 pending_messages.clear();
@@ -1892,9 +1892,7 @@ pub async fn run_loop(
                 // (the SystemNotice above), not from this return value —
                 // today's production callers discard it — so this is a
                 // contract nicety, not the display mechanism.
-                new_messages.push(LoopMessage::User(super::message::UserMessage {
-                    content: notice,
-                }));
+                new_messages.push(LoopMessage::User(super::message::UserMessage::text(notice)));
                 break 'outer;
             }
 
@@ -2057,7 +2055,7 @@ fn build_critic_transcript(new_messages: &[LoopMessage]) -> String {
     for m in new_messages {
         match m {
             LoopMessage::User(u) => {
-                blocks.push(format!("USER: {}\n", u.content.trim()));
+                blocks.push(format!("USER: {}\n", u.text_joined().trim()));
             }
             LoopMessage::Assistant(a) => {
                 for block in &a.content {

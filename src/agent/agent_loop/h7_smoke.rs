@@ -213,6 +213,7 @@ async fn h7_scenario_1_simple_text() {
         stream_fn,
         system_prompt: "You are a helpful assistant. Reply concisely.".to_string(),
         history: Vec::new(),
+        initial_prompt_images: Vec::new(),
         initial_prompt: "What is 2+2? Reply with just the number, nothing else.".to_string(),
         tools: Vec::new(),
         #[cfg(feature = "plugin")]
@@ -222,6 +223,7 @@ async fn h7_scenario_1_simple_text() {
         event_channel_capacity: 256,
         provider_name: None,
         model_name: None,
+        asset_dir: None,
         summarize_fn: None,
         tool_def_filter: None,
         dynamic_tool_search: false,
@@ -295,6 +297,7 @@ async fn h7_scenario_2_turn_boundaries() {
         stream_fn,
         system_prompt: "Reply briefly.".to_string(),
         history: Vec::new(),
+        initial_prompt_images: Vec::new(),
         initial_prompt: "Say the word 'banana' and nothing else.".to_string(),
         tools: Vec::new(),
         #[cfg(feature = "plugin")]
@@ -304,6 +307,7 @@ async fn h7_scenario_2_turn_boundaries() {
         event_channel_capacity: 256,
         provider_name: None,
         model_name: None,
+        asset_dir: None,
         summarize_fn: None,
         tool_def_filter: None,
         dynamic_tool_search: false,
@@ -411,6 +415,7 @@ async fn h7_scenario_5_auth_error_surfaces() {
         stream_fn,
         system_prompt: String::new(),
         history: Vec::new(),
+        initial_prompt_images: Vec::new(),
         initial_prompt: "hi".to_string(),
         tools: Vec::new(),
         #[cfg(feature = "plugin")]
@@ -420,6 +425,7 @@ async fn h7_scenario_5_auth_error_surfaces() {
         event_channel_capacity: 256,
         provider_name: None,
         model_name: None,
+        asset_dir: None,
         summarize_fn: None,
         tool_def_filter: None,
         dynamic_tool_search: false,
@@ -579,6 +585,7 @@ async fn h7_scenario_3_tool_dispatch() {
                         the tool, briefly confirm what was echoed."
             .to_string(),
         history: Vec::new(),
+        initial_prompt_images: Vec::new(),
         initial_prompt: "Echo the word 'pineapple'.".to_string(),
         tools: vec![tool],
         #[cfg(feature = "plugin")]
@@ -588,6 +595,7 @@ async fn h7_scenario_3_tool_dispatch() {
         event_channel_capacity: 256,
         provider_name: None,
         model_name: None,
+        asset_dir: None,
         summarize_fn: None,
         tool_def_filter: None,
         dynamic_tool_search: false,
@@ -699,6 +707,7 @@ async fn h7_glm_scenario_1_simple_text() {
         stream_fn,
         system_prompt: "You are a helpful assistant. Reply concisely.".to_string(),
         history: Vec::new(),
+        initial_prompt_images: Vec::new(),
         initial_prompt: "What is 2+2? Reply with just the number, nothing else.".to_string(),
         tools: Vec::new(),
         #[cfg(feature = "plugin")]
@@ -708,6 +717,7 @@ async fn h7_glm_scenario_1_simple_text() {
         event_channel_capacity: 256,
         provider_name: None,
         model_name: None,
+        asset_dir: None,
         summarize_fn: None,
         tool_def_filter: None,
         dynamic_tool_search: false,
@@ -837,6 +847,7 @@ async fn h7_glm_scenario_3_tool_dispatch() {
                         the tool, briefly confirm what was echoed."
             .to_string(),
         history: Vec::new(),
+        initial_prompt_images: Vec::new(),
         initial_prompt: "Echo the word 'pineapple'.".to_string(),
         tools: vec![tool],
         #[cfg(feature = "plugin")]
@@ -846,6 +857,7 @@ async fn h7_glm_scenario_3_tool_dispatch() {
         event_channel_capacity: 256,
         provider_name: None,
         model_name: None,
+        asset_dir: None,
         summarize_fn: None,
         tool_def_filter: None,
         dynamic_tool_search: false,

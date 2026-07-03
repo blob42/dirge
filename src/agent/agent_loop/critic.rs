@@ -215,13 +215,11 @@ pub async fn run_critic(
         }
     };
     match parse_verdict(&response) {
-        Some(issues) => vec![LoopMessage::User(UserMessage {
-            content: format!(
-                "{CRITIC_TAG} A review of your work found it may not be done yet. Address these \
-                 before reporting complete, or explain why they don't apply (e.g. they're out of \
-                 scope or something you were told not to do):\n{issues}"
-            ),
-        })],
+        Some(issues) => vec![LoopMessage::User(UserMessage::text(format!(
+            "{CRITIC_TAG} A review of your work found it may not be done yet. Address these \
+             before reporting complete, or explain why they don't apply (e.g. they're out of \
+             scope or something you were told not to do):\n{issues}"
+        )))],
         None => Vec::new(),
     }
 }
@@ -457,7 +455,7 @@ mod tests {
         let msgs = run_critic(&critic, "rules", "did stuff", None).await;
         assert_eq!(msgs.len(), 1);
         let content = match &msgs[0] {
-            LoopMessage::User(u) => &u.content,
+            LoopMessage::User(u) => u.text_joined(),
             _ => panic!("expected user message"),
         };
         assert!(content.starts_with(CRITIC_TAG));

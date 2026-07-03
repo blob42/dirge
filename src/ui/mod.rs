@@ -5,6 +5,7 @@ pub(crate) mod box_render;
 pub(crate) mod btw;
 pub(crate) mod buffer;
 mod chat_state;
+mod clipboard_image;
 pub(crate) mod colors;
 pub(crate) mod compaction;
 pub(crate) mod done_phase;
@@ -174,6 +175,39 @@ fn shell_overlay_rows(parser: &vt100::Parser) -> Vec<(String, crossterm::style::
 
 /// Max logical lines passed to the shell box (the painter soft-wraps further).
 const SHELL_OVERLAY_MAX_LINES: usize = 64;
+
+/// Probe the clipboard for an image and, when the active provider is
+/// multimodal and one is present, insert it as a `[image]` paste slot.
+/// Shared by the bracketed-paste path (`UserEvent::Paste` with an empty
+/// payload — how an image-bearing clipboard surfaces there) and the raw
+/// Ctrl+V keystroke (terminals that pass Ctrl+V through instead of
+/// delivering a bracketed paste). Returns `true` when an image was
+/// inserted, so the caller can repaint + consume the event.
+fn try_paste_clipboard_image(
+    cfg: &crate::config::Config,
+    session: &crate::session::Session,
+    input: &mut crate::ui::input::InputEditor,
+) -> bool {
+    let entry = cfg
+        .providers
+        .as_ref()
+        .and_then(|m| m.get(session.provider.as_str()));
+    if !crate::config::supports_images(
+        entry.and_then(|e| e.provider_type.as_deref()),
+        Some(session.model.as_str()),
+        entry.and_then(|e| e.multimodal),
+    ) {
+        return false;
+    }
+    let Some(img) = crate::ui::clipboard_image::read_clipboard_image() else {
+        return false;
+    };
+    input.handle_paste_image(crate::ui::input::PendingImage {
+        bytes: img.bytes,
+        media_type: img.media_type.to_string(),
+    });
+    true
+}
 
 // Interactive entry point — every collaborator (client, agent, CLI,
 // config, session, context, hooks, plugin manager, …) is threaded in
@@ -610,12 +644,15 @@ pub async fn run_interactive(
                 let history = crate::agent::runner::convert_history(session);
                 session.add_message(MessageRole::User, &combined);
                 let runner = agent.clone().spawn_runner(
-                    crate::agent::tools::background::prepend_pending_notifications(
-                        &combined,
-                        bg_store.as_ref(),
+                    crate::provider::Prompt::text(
+                        crate::agent::tools::background::prepend_pending_notifications(
+                            &combined,
+                            bg_store.as_ref(),
+                        ),
                     ),
                     history,
                     Some(ui.interjection_queue.clone()),
+                    None,
                 );
                 runner.install_into(
                     &mut ui.agent_rx,
@@ -1482,6 +1519,16 @@ pub async fn run_interactive(
                         continue;
                     }
                     UserEvent::Paste(text) => {
+                        // Image-first paste: an image on the clipboard
+                        // arrives as an EMPTY bracketed paste (no text
+                        // bytes), so when the active model is multimodal
+                        // grab the image as a `[image]` paste slot instead
+                        // of the (empty) text. Non-empty paste → text.
+                        if text.is_empty() && try_paste_clipboard_image(cfg, session, &mut input)
+                        {
+                            renderer.request_repaint();
+                            continue;
+                        }
                         input.handle_paste(&text);
                         renderer.request_repaint();
                         continue;
@@ -2271,7 +2318,26 @@ pub async fn run_interactive(
                         // rendered box so Up/Down move by wrapped display
                         // rows (dirge-5w9v).
                         input.set_wrap_width(renderer.input_wrap_w());
+                        // Raw Ctrl+V that reached the editor: the terminal
+                        // did NOT deliver a bracketed paste (that arrives
+                        // as UserEvent::Paste above), so probe the clipboard
+                        // for an image — covers terminals that pass Ctrl+V
+                        // through as a keystroke. The two paths are mutually
+                        // exclusive (bracketed paste consumes Ctrl+V), so
+                        // there's no double-paste. No image → fall through.
+                        if key.code == KeyCode::Char('v')
+                            && key.modifiers.contains(KeyModifiers::CONTROL)
+                            && !key.modifiers.contains(KeyModifiers::ALT)
+                            && try_paste_clipboard_image(cfg, session, &mut input)
+                        {
+                            renderer.request_repaint();
+                            continue;
+                        }
                         if let Some(text) = input.handle_key(key) {
+                            // Drain pasted-image slots (populated by
+                            // handle_key's Enter branch) for this turn.
+                            let pending_images =
+                                std::mem::take(&mut input.pending_images);
                             // Review #4: any submission starts a new
                             // turn — drop the expand-toggle stash so
                             // Ctrl+O doesn't expand (or, via a stale
@@ -2632,9 +2698,10 @@ pub async fn run_interactive(
                                                 crate::agent::runner::convert_history(session);
                                             session.add_message(MessageRole::User, &run_text);
                                             let runner = agent.clone().spawn_runner(
-                                                crate::agent::tools::background::prepend_pending_notifications(&run_text, bg_store.as_ref()),
+                                                crate::provider::Prompt::text(crate::agent::tools::background::prepend_pending_notifications(&run_text, bg_store.as_ref())),
                                                 history,
                                                 Some(ui.interjection_queue.clone()),
+                                                None,
                                             );
                                             runner.install_into(&mut ui.agent_rx, &mut ui.agent_abort, &mut ui.agent_interject, &mut ui.agent_cancel, &mut ui.is_running);
                                             begin_snapshot_turn(session);
@@ -2675,9 +2742,10 @@ pub async fn run_interactive(
                                             let prompt = ls.build_prompt();
                                             ui.last_user_prompt.clone_from(&prompt);
                                             let runner = agent.clone().spawn_runner(
-                                                crate::agent::tools::background::prepend_pending_notifications(&prompt, bg_store.as_ref()),
+                                                crate::provider::Prompt::text(crate::agent::tools::background::prepend_pending_notifications(&prompt, bg_store.as_ref())),
                                                 Vec::new(),
                                                 Some(ui.interjection_queue.clone()),
+                                                None,
                                             );
                                             runner.install_into(&mut ui.agent_rx, &mut ui.agent_abort, &mut ui.agent_interject, &mut ui.agent_cancel, &mut ui.is_running);
                                             ui.loop_label = Some(ls.iteration_label());
@@ -2731,11 +2799,38 @@ pub async fn run_interactive(
                                 // to the steering queue (same as compaction), so
                                 // the in-flight phase can't be clobbered. With no
                                 // plugin there's no on-prompt — run the tail now.
+                                // Persist pasted images to the session asset dir and
+                                // build the ImageRef list for this turn. Both the
+                                // plugin-deferred and inline submit paths attach these;
+                                // resume turns carry theirs through history as
+                                // dirge-asset sentinels.
+                                let mut image_refs: Vec<
+                                    crate::agent::agent_loop::message::ImageRef,
+                                > = Vec::new();
+                                for img in pending_images {
+                                    let asset_id = crate::agent::agent_loop::message::AssetId(
+                                        crate::agent::runner::uuid_v4_simple(),
+                                    );
+                                    if let Err(e) = session.write_asset(&asset_id, &img.bytes) {
+                                        tracing::warn!(
+                                            target: "ui",
+                                            "paste image persist failed: {e}"
+                                        );
+                                        continue;
+                                    }
+                                    image_refs.push(
+                                        crate::agent::agent_loop::message::ImageRef {
+                                            asset_id,
+                                            media_type: img.media_type,
+                                        },
+                                    );
+                                }
                                 #[cfg(feature = "plugin")]
                                 let deferred_to_prompt_hook = if let Some(pm) = plugin_manager {
                                     ui.prompt_phase = Some(crate::ui::prompt_phase::spawn(
                                         pm.clone(),
                                         text.to_string(),
+                                        image_refs.clone(),
                                     ));
                                     ui.is_running = true;
                                     renderer.set_avatar_state(avatar::AvatarState::Thinking);
@@ -2755,6 +2850,7 @@ pub async fn run_interactive(
                                         None,
                                         None,
                                         &text,
+                                        image_refs,
                                         &mut ui.is_running,
                                         &mut ui.agent_rx,
                                         &mut ui.agent_abort,
@@ -2873,11 +2969,14 @@ pub async fn run_interactive(
                             session.add_message(MessageRole::User, &msg);
                             begin_snapshot_turn(session);
                             let runner = agent.clone().spawn_runner(
-                                crate::agent::tools::background::prepend_pending_notifications(
-                                    &msg, bg_store.as_ref(),
+                                crate::provider::Prompt::text(
+                                    crate::agent::tools::background::prepend_pending_notifications(
+                                        &msg, bg_store.as_ref(),
+                                    ),
                                 ),
                                 history,
                                 Some(ui.interjection_queue.clone()),
+                                None,
                             );
                             runner.install_into(
                                 &mut ui.agent_rx,
@@ -3361,9 +3460,10 @@ pub async fn run_interactive(
                         let history = crate::agent::runner::convert_history(session);
                         renderer.set_avatar_state(avatar::AvatarState::Idle);
                         let runner = agent.clone().spawn_runner(
-                            crate::agent::tools::background::prepend_pending_notifications(&kickoff.impl_prompt, bg_store.as_ref()),
+                            crate::provider::Prompt::text(crate::agent::tools::background::prepend_pending_notifications(&kickoff.impl_prompt, bg_store.as_ref())),
                             history,
                             Some(ui.interjection_queue.clone()),
+                            None,
                         );
                         runner.install_into(&mut ui.agent_rx, &mut ui.agent_abort, &mut ui.agent_interject, &mut ui.agent_cancel, &mut ui.is_running);
                         ui.active_plan = Some(kickoff.active);
@@ -3395,6 +3495,7 @@ pub async fn run_interactive(
                     continue;
                 };
                 let text = handle.text;
+                let images = handle.images;
                 match ev {
                     Some(PromptPhaseEvent::Ready(result)) => {
                         for line in &result.lines {
@@ -3411,6 +3512,7 @@ pub async fn run_interactive(
                             result.hint,
                             result.replace,
                             &text,
+                            images,
                             &mut ui.is_running,
                             &mut ui.agent_rx,
                             &mut ui.agent_abort,
@@ -3538,7 +3640,7 @@ pub async fn run_interactive(
                 // interjections for tool-side-effect safety).
                 enum Next {
                     Finish { clear_queue: bool },
-                    Submit { run_prompt: String, record_text: String },
+                    Submit { run_prompt: String, record_text: String, images: Vec<crate::agent::agent_loop::message::ImageRef> },
                     Retry { prompt: String },
                     // dirge-b899: resume a made-progress turn as a continuation
                     // against the compacted history (which already carries the
@@ -3569,8 +3671,8 @@ pub async fn run_interactive(
                         }
                         match then {
                             CompactionThen::Nothing => Next::Finish { clear_queue: false },
-                            CompactionThen::SendPrompt { run_prompt, record_text } => {
-                                Next::Submit { run_prompt, record_text }
+                            CompactionThen::SendPrompt { run_prompt, record_text, images } => {
+                                Next::Submit { run_prompt, record_text, images }
                             }
                             CompactionThen::RetryAfterOverflow { prompt, made_progress } => {
                                 use crate::ui::compaction::OverflowRecovery;
@@ -3607,14 +3709,14 @@ pub async fn run_interactive(
                                 renderer.write_line(&format!("compaction failed: {error}"), c_error())?;
                                 Next::Finish { clear_queue: false }
                             }
-                            CompactionThen::SendPrompt { run_prompt, record_text } => {
+                            CompactionThen::SendPrompt { run_prompt, record_text, images } => {
                                 // Preemptive estimate; the real send may still fit
                                 // and reactive recovery is the backstop. Proceed.
                                 renderer.write_line(
                                     &format!("preemptive compaction failed (will retry reactively if needed): {error}"),
                                     c_error(),
                                 )?;
-                                Next::Submit { run_prompt, record_text }
+                                Next::Submit { run_prompt, record_text, images }
                             }
                             CompactionThen::RetryAfterOverflow { .. } => {
                                 renderer.write_line(
@@ -3628,19 +3730,26 @@ pub async fn run_interactive(
                 };
 
                 match next {
-                    Next::Submit { run_prompt, record_text } => {
+                    Next::Submit { run_prompt, record_text, images } => {
                         // New streamed turn from the post-compaction state. Mirrors
                         // the inline submit path: history (without the new prompt),
                         // spawn the runner with the (rewritten) prompt, then record
                         // the original text. `last_user_prompt` was set at submit.
                         let history = crate::agent::runner::convert_history(session);
+                        // Clone for the session record so resume sees
+                        // the images; the Prompt move consumes them.
+                        let record_images = images.clone();
                         let runner = agent.clone().spawn_runner(
-                            crate::agent::tools::background::prepend_pending_notifications(&run_prompt, bg_store.as_ref()),
+                            crate::provider::Prompt {
+                                text: crate::agent::tools::background::prepend_pending_notifications(&run_prompt, bg_store.as_ref()),
+                                images,
+                            },
                             history,
                             Some(ui.interjection_queue.clone()),
+                            Some(session.assets_dir()),
                         );
                         runner.install_into(&mut ui.agent_rx, &mut ui.agent_abort, &mut ui.agent_interject, &mut ui.agent_cancel, &mut ui.is_running);
-                        session.add_message(MessageRole::User, &record_text);
+                        session.add_message_with_images(MessageRole::User, &record_text, record_images);
                         begin_snapshot_turn(session);
                         renderer.set_avatar_state(avatar::AvatarState::Idle);
                     }
@@ -3656,9 +3765,10 @@ pub async fn run_interactive(
                         }
                         ui.last_user_prompt.clone_from(&prompt);
                         let runner = agent.clone().spawn_runner(
-                            crate::agent::tools::background::prepend_pending_notifications(&prompt, bg_store.as_ref()),
+                            crate::provider::Prompt::text(crate::agent::tools::background::prepend_pending_notifications(&prompt, bg_store.as_ref())),
                             history,
                             Some(ui.interjection_queue.clone()),
+                            None,
                         );
                         runner.install_into(&mut ui.agent_rx, &mut ui.agent_abort, &mut ui.agent_interject, &mut ui.agent_cancel, &mut ui.is_running);
                         ui.last_collapsed = None;
@@ -3675,9 +3785,10 @@ pub async fn run_interactive(
                         let history = crate::agent::runner::convert_history(session);
                         ui.last_user_prompt = RESUME_NUDGE.to_string();
                         let runner = agent.clone().spawn_runner(
-                            crate::agent::tools::background::prepend_pending_notifications(RESUME_NUDGE, bg_store.as_ref()),
+                            crate::provider::Prompt::text(crate::agent::tools::background::prepend_pending_notifications(RESUME_NUDGE, bg_store.as_ref())),
                             history,
                             Some(ui.interjection_queue.clone()),
+                            None,
                         );
                         runner.install_into(&mut ui.agent_rx, &mut ui.agent_abort, &mut ui.agent_interject, &mut ui.agent_cancel, &mut ui.is_running);
                         session.add_message(MessageRole::User, RESUME_NUDGE);
@@ -4462,7 +4573,7 @@ pub async fn run_interactive(
                             bg_store.as_ref(),
                         );
                     ui.last_user_prompt.clone_from(&synth_prompt);
-                    let runner = agent.clone().spawn_runner(composed, history, Some(ui.interjection_queue.clone()));
+                    let runner = agent.clone().spawn_runner(crate::provider::Prompt::text(composed), history, Some(ui.interjection_queue.clone()), None);
                     runner.install_into(&mut ui.agent_rx, &mut ui.agent_abort, &mut ui.agent_interject, &mut ui.agent_cancel, &mut ui.is_running);
                     renderer.request_repaint();
                 }

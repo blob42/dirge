@@ -216,6 +216,7 @@ fn build_config() -> LoopConfig {
         request_timeout: None,
         provider_name: None,
         model_name: None,
+        asset_dir: None,
         compact_model: None,
         storm_mutating_tools: None,
         storm_exempt_tools: None,

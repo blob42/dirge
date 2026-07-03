@@ -66,6 +66,7 @@ fn build_config() -> LoopConfig {
         request_timeout: None,
         provider_name: None,
         model_name: None,
+        asset_dir: None,
         compact_model: None,
         storm_mutating_tools: None,
         storm_exempt_tools: None,
@@ -101,9 +102,7 @@ fn empty_context() -> Context {
 }
 
 fn user(text: &str) -> LoopMessage {
-    LoopMessage::User(UserMessage {
-        content: text.to_string(),
-    })
+    LoopMessage::User(UserMessage::text(text))
 }
 
 fn text_response(text: &str) -> AssistantMessage {
@@ -759,7 +758,7 @@ async fn verifier_gate_nudges_when_code_edited_without_running() {
     drop(tx);
 
     let saw_nudge = messages.iter().any(|m| match m {
-        LoopMessage::User(u) => u.content.contains("[verify-before-done]"),
+        LoopMessage::User(u) => u.text_joined().contains("[verify-before-done]"),
         _ => false,
     });
     assert!(
@@ -815,7 +814,7 @@ async fn verifier_gate_silent_when_a_command_ran() {
     drop(tx);
 
     let saw_nudge = messages.iter().any(|m| match m {
-        LoopMessage::User(u) => u.content.contains("[verify-before-done]"),
+        LoopMessage::User(u) => u.text_joined().contains("[verify-before-done]"),
         _ => false,
     });
     assert!(
@@ -924,8 +923,13 @@ async fn verifier_gate_nudges_on_failing_build_after_edit() {
     drop(tx);
 
     let nudge = messages.iter().find_map(|m| match m {
-        LoopMessage::User(u) if u.content.contains("[verify-before-done]") => {
-            Some(u.content.clone())
+        LoopMessage::User(u) => {
+            let t = u.text_joined();
+            if t.contains("[verify-before-done]") {
+                Some(t)
+            } else {
+                None
+            }
         }
         _ => None,
     });
@@ -984,10 +988,10 @@ async fn critic_reenters_loop_on_incomplete_verdict() {
     .await;
     drop(tx);
 
-    let critic_msgs: Vec<&String> = messages
+    let critic_msgs: Vec<String> = messages
         .iter()
         .filter_map(|m| match m {
-            LoopMessage::User(u) if u.content.contains("[critic]") => Some(&u.content),
+            LoopMessage::User(u) if u.text_joined().contains("[critic]") => Some(u.text_joined()),
             _ => None,
         })
         .collect();
@@ -1044,7 +1048,7 @@ async fn critic_silent_on_complete_verdict() {
     assert!(
         !messages
             .iter()
-            .any(|m| matches!(m, LoopMessage::User(u) if u.content.contains("[critic]"))),
+            .any(|m| matches!(m, LoopMessage::User(u) if u.text_joined().contains("[critic]"))),
         "a COMPLETE verdict should not inject a critic message",
     );
 }
@@ -1420,10 +1424,11 @@ async fn nqr_max_turns_cap_terminates_run() {
     let LoopMessage::User(u) = last else {
         panic!("expected user message, got {role:?}");
     };
+    let body = u.text_joined();
     assert!(
-        u.content.contains("Max agent turns"),
+        body.contains("Max agent turns"),
         "cap notice missing: {:?}",
-        u.content
+        body
     );
 
     // The cap is surfaced to the user as a SystemNotice (a `<system>`
@@ -1448,7 +1453,7 @@ async fn nqr_max_turns_cap_terminates_run() {
         }
         | LoopEvent::MessageEnd {
             message: LoopMessage::User(u),
-        } => u.content.contains("Max agent turns"),
+        } => u.text_joined().contains("Max agent turns"),
         _ => false,
     });
     assert!(
@@ -1501,7 +1506,7 @@ async fn nqr_unlimited_when_max_turns_none() {
     for m in &messages {
         if let LoopMessage::User(u) = m {
             assert!(
-                !u.content.contains("Max agent turns"),
+                !u.text_joined().contains("Max agent turns"),
                 "unexpected cap notice"
             );
         }

@@ -114,6 +114,7 @@ fn build_config() -> LoopConfig {
         request_timeout: None,
         provider_name: None,
         model_name: None,
+        asset_dir: None,
         compact_model: None,
         storm_mutating_tools: None,
         storm_exempt_tools: None,
@@ -904,9 +905,7 @@ impl LoopTool for EchoTool {
 }
 
 fn user(text: &str) -> LoopMessage {
-    LoopMessage::User(UserMessage {
-        content: text.to_string(),
-    })
+    LoopMessage::User(UserMessage::text(text))
 }
 
 fn text_response(text: &str) -> AssistantMessage {
@@ -1449,7 +1448,7 @@ async fn test_steering_messages_injected_after_tool_calls() {
     let user_contents: Vec<String> = messages
         .iter()
         .filter_map(|m| match m {
-            LoopMessage::User(u) => Some(u.content.clone()),
+            LoopMessage::User(u) => Some(u.text_joined()),
             _ => None,
         })
         .collect();
@@ -1461,7 +1460,7 @@ async fn test_steering_messages_injected_after_tool_calls() {
     let interrupt_idx = events.iter().position(|e| match e {
         LoopEvent::MessageStart {
             message: LoopMessage::User(u),
-        } => u.content == "interrupt",
+        } => u.text_joined() == "interrupt",
         _ => false,
     });
     let last_tool_result_end_idx = events.iter().rposition(|e| {
@@ -3116,12 +3115,12 @@ async fn context_compacted_reports_compaction_kind() {
 #[test]
 fn todo_nudge_message_pluralizes() {
     let one = match todo_nudge_message(1) {
-        LoopMessage::User(u) => u.content,
+        LoopMessage::User(u) => u.text_joined(),
         _ => panic!("expected a user message"),
     };
     assert!(one.contains("1 unfinished todo "), "singular: {one}");
     let many = match todo_nudge_message(3) {
-        LoopMessage::User(u) => u.content,
+        LoopMessage::User(u) => u.text_joined(),
         _ => panic!("expected a user message"),
     };
     assert!(many.contains("3 unfinished todos "), "plural: {many}");
@@ -3168,9 +3167,7 @@ async fn finalization_hook_short_circuits_lower_gates() {
     config.get_followup_messages = Some(std::sync::Arc::new(|| {
         Box::pin(async {
             vec![LoopMessage::User(
-                crate::agent::agent_loop::message::UserMessage {
-                    content: "hook follow-up".into(),
-                },
+                crate::agent::agent_loop::message::UserMessage::text("hook follow-up"),
             )]
         })
     }));
@@ -3506,8 +3503,13 @@ async fn consecutive_distinct_failures_inject_recovery_checkpoint() {
     drop(tx);
 
     let checkpoint = messages.iter().find_map(|m| match m {
-        LoopMessage::User(u) if u.content.contains("[Recovery checkpoint]") => {
-            Some(u.content.clone())
+        LoopMessage::User(u) => {
+            let t = u.text_joined();
+            if t.contains("[Recovery checkpoint]") {
+                Some(t)
+            } else {
+                None
+            }
         }
         _ => None,
     });
@@ -3550,7 +3552,7 @@ async fn failure_then_success_injects_no_checkpoint() {
     assert!(
         !messages.iter().any(|m| matches!(
             m,
-            LoopMessage::User(u) if u.content.contains("[Recovery checkpoint]")
+            LoopMessage::User(u) if u.text_joined().contains("[Recovery checkpoint]")
         )),
         "a success between failures must reset the streak"
     );

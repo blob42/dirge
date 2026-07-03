@@ -51,6 +51,11 @@ pub struct LlmContext {
     pub system_prompt: String,
     /// LLM-compatible messages (output of `convert_to_llm`).
     pub messages: Vec<serde_json::Value>,
+    /// Session asset dir for resolving `UserPart::Image` refs to
+    /// base64 at the rig boundary. `None` when there is no session
+    /// (e.g. headless/-p paths) — image parts then degrade to a
+    /// text placeholder in the converter.
+    pub asset_dir: Option<std::path::PathBuf>,
 }
 
 /// Per-call options threaded from the loop to the stream
@@ -171,6 +176,7 @@ pub async fn stream_assistant_response(
     let llm_ctx = LlmContext {
         system_prompt: context.system_prompt.clone(),
         messages: llm_messages,
+        asset_dir: config.asset_dir.clone(),
     };
     let stream_options = StreamOptions {
         api_key: resolved_api_key,
@@ -444,6 +450,7 @@ mod tests {
             request_timeout: None,
             provider_name: None,
             model_name: None,
+            asset_dir: None,
             compact_model: None,
             storm_mutating_tools: None,
             storm_exempt_tools: None,
@@ -752,6 +759,7 @@ mod tests {
             request_timeout: None,
             provider_name: None,
             model_name: None,
+            asset_dir: None,
             compact_model: None,
             storm_mutating_tools: None,
             storm_exempt_tools: None,

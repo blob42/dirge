@@ -741,6 +741,7 @@ mod tests {
                 provider_type: Some("openai".to_string()),
                 base_url: Some("http://localhost:11434/v1".to_string()),
                 allow_insecure: true,
+                multimodal: None,
                 ..Default::default()
             },
         )]);
@@ -995,6 +996,7 @@ mod tests {
                 provider_type: Some("openai".to_string()),
                 base_url: Some("http://localhost:11434/v1".to_string()),
                 allow_insecure: true,
+                multimodal: None,
                 ..Default::default()
             },
         )]);
@@ -1274,6 +1276,7 @@ mod tests {
             ProviderEntry {
                 base_url: Some("http://proxy.local/openai".to_string()),
                 allow_insecure: true,
+                multimodal: None,
                 ..Default::default()
             },
         )]);
